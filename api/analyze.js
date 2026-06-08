@@ -4,63 +4,94 @@ module.exports = async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
   if (req.method === 'OPTIONS') return res.status(200).end();
-  if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
+
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: 'Method not allowed' });
+  }
 
   const { name, category, budget, marketplace } = req.body || {};
-  if (!name?.trim()) return res.status(400).json({ error: 'Введи название товара' });
 
-  const prompt = `Ты — эксперт по аналитике маркетплейсов Wildberries, Ozon и Яндекс.Маркет.
+  if (!name?.trim()) {
+    return res.status(400).json({ error: 'Введи название товара' });
+  }
+
+  const prompt = `Ты — эксперт по аналитике маркетплейсов.
+
 Товар: "${name}"
 Категория: ${category || 'не указана'}
 Бюджет: ${budget ? budget + ' ₽' : 'не указан'}
-Маркетплейс: ${marketplace}
+Маркетплейс: ${marketplace || 'не указан'}
 
-Верни ТОЛЬКО JSON без markdown:
+Верни ТОЛЬКО JSON:
+
 {
   "product": "название",
-  "overall_score": 0-100,
-  "scores": { "demand": 0-100, "competition": 0-100, "margin": 0-60 },
-  "revenue_estimate": { "monthly_min": "число", "monthly_max": "число", "payback": "срок" },
-  "pros": ["5 пунктов"],
-  "cons": ["4 пункта"],
-  "tips": ["3 совета"],
-  "conclusion": "2-3 предложения"
-}
-Реалистично, на русском. Если товар бессмысленный — поставь overall_score ниже 20 и напиши об этом в conclusion.`;
+  "overall_score": 0,
+  "scores": {
+    "demand": 0,
+    "competition": 0,
+    "margin": 0
+  },
+  "revenue_estimate": {
+    "monthly_min": "0",
+    "monthly_max": "0",
+    "payback": "0"
+  },
+  "pros": [],
+  "cons": [],
+  "tips": [],
+  "conclusion": ""
+}`;
 
-  const apiKey = process.env.ANTHROPIC_API_KEY;
+  const apiKey = process.env.GROQ_API_KEY;
+
   if (!apiKey) {
     return res.status(503).json({
-      error: 'ANTHROPIC_API_KEY не настроен. Добавь ключ в Vercel → Settings → Environment Variables и сделай Redeploy.'
+      error: 'GROQ_API_KEY не настроен'
     });
   }
 
   try {
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': apiKey,
-        'anthropic-version': '2023-06-01'
-      },
-      body: JSON.stringify({
-        model: 'claude-sonnet-4-20250514',
-        max_tokens: 1200,
-        messages: [{ role: 'user', content: prompt }]
-      })
-    });
-
-    if (!response.ok) {
-      const err = await response.json().catch(() => ({}));
-      throw new Error(err.error?.message || `HTTP ${response.status}`);
-    }
+    const response = await fetch(
+      'https://api.groq.com/openai/v1/chat/completions',
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          model: 'llama-3.3-70b-versatile',
+          messages: [
+            {
+              role: 'user',
+              content: prompt
+            }
+          ],
+          temperature: 0.7
+        })
+      }
+    );
 
     const data = await response.json();
-    const text = data.content?.map(b => b.text || '').join('') || '';
-    const clean = text.replace(/```json|```/g, '').trim();
+
+    if (!response.ok) {
+      return res.status(response.status).json(data);
+    }
+
+    const text = data.choices?.[0]?.message?.content || '';
+
+    const clean = text
+      .replace(/```json/g, '')
+      .replace(/```/g, '')
+      .trim();
+
     const result = JSON.parse(clean);
+
     return res.status(200).json(result);
-  } catch (e) {
-    return res.status(500).json({ error: e.message || 'Ошибка AI' });
+  } catch (error) {
+    return res.status(500).json({
+      error: error.message
+    });
   }
 };
